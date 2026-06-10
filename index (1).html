@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta name="theme-color" content="#0d0d0d"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="FitTrack"/>
+<link rel="manifest" href="manifest.json"/>
+<title>FitTrack</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;background:#0d0d0d;}
+body{color:#eee;font-family:'Space Mono',monospace;overscroll-behavior:none;-webkit-tap-highlight-color:transparent;}
+input,select,textarea{font-family:'Space Mono',monospace;color:#eee;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:10px 14px;font-size:13px;outline:none;width:100%;box-sizing:border-box;}
+select option{background:#1a1a1a;}
+button{cursor:pointer;}
+::-webkit-scrollbar{width:0;}
+textarea{resize:vertical;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ── Constants ──
+const MG=["Brust","Rücken","Schultern","Arme","Beine","Bauch","Ganzkörper"];
+const FC=["Frühstück","Mittagessen","Abendessen","Snack"];
+const BP=["Brust","Taille","Hüfte","Oberarm","Oberschenkel","Wade"];
+const MOODS=["😄","😊","😐","😔","😫"];
+const ML=["Super","Gut","Ok","Schlecht","Erschöpft"];
+const TMPLS=[
+  {name:"Push Day",ex:[{name:"Bankdrücken",g:"Brust",s:"4",r:"8",w:""},{name:"Schulterdrücken",g:"Schultern",s:"3",r:"10",w:""},{name:"Trizeps Pushdown",g:"Arme",s:"3",r:"12",w:""}]},
+  {name:"Pull Day",ex:[{name:"Klimmzüge",g:"Rücken",s:"4",r:"8",w:""},{name:"Rudern",g:"Rücken",s:"3",r:"10",w:""},{name:"Bizeps Curls",g:"Arme",s:"3",r:"12",w:""}]},
+  {name:"Leg Day",ex:[{name:"Kniebeugen",g:"Beine",s:"4",r:"8",w:""},{name:"Beinpresse",g:"Beine",s:"3",r:"12",w:""},{name:"Wadenheben",g:"Beine",s:"4",r:"15",w:""}]},
+];
+
+// ── Storage ──
+const ls={get:k=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null;}catch{return null;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}};
+
+// ── GPX/TCX ──
+function hav(a,b,c,d){const R=6371,dL=(c-a)*Math.PI/180,dO=(d-b)*Math.PI/180,x=Math.sin(dL/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dO/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+function parseGPX(xml){
+  const doc=new DOMParser().parseFromString(xml,"application/xml");
+  const pts=Array.from(doc.querySelectorAll("trkpt"));if(!pts.length)return null;
+  let tot=0,hrT=0,hrN=0,kmD=0,kmS=null,kmHT=0,kmHN=0,prev=null;const sp=[];
+  pts.forEach(p=>{const la=parseFloat(p.getAttribute("lat")),lo=parseFloat(p.getAttribute("lon")),tEl=p.querySelector("time"),hrEl=p.querySelector("hr")||p.querySelector("heartrate"),hr=hrEl?parseInt(hrEl.textContent):null,t=tEl?new Date(tEl.textContent):null;
+    if(prev){const d=hav(prev.la,prev.lo,la,lo);tot+=d;kmD+=d;if(hr&&hr>30&&hr<220){hrT+=hr;hrN++;kmHT+=hr;kmHN++;}if(kmD>=1){const el=t&&kmS?(t-kmS)/60000:null;sp.push({km:sp.length+1,time:el?el.toFixed(1):null,hr:kmHN>0?Math.round(kmHT/kmHN):null});kmD=0;kmS=t;kmHT=0;kmHN=0;}if(!kmS&&t)kmS=t;}else kmS=t;prev={la,lo,time:t};});
+  const f=pts[0].querySelector("time"),l=pts[pts.length-1].querySelector("time");
+  return{dist:tot.toFixed(2),time:f&&l?((new Date(l.textContent)-new Date(f.textContent))/60000).toFixed(0):null,avgHR:hrN>0?Math.round(hrT/hrN):null,kmSplits:sp,date:f?new Date(f.textContent).toISOString().slice(0,10):new Date().toISOString().slice(0,10),note:"GPX Import"};
+}
+function parseTCX(xml){
+  const doc=new DOMParser().parseFromString(xml,"application/xml");
+  const pts=Array.from(doc.querySelectorAll("Trackpoint"));if(!pts.length)return null;
+  let tot=0,hrT=0,hrN=0,kmD=0,kmS=null,kmHT=0,kmHN=0,prev=null;const sp=[];
+  pts.forEach(p=>{const laEl=p.querySelector("LatitudeDegrees"),loEl=p.querySelector("LongitudeDegrees"),tEl=p.querySelector("Time"),hrEl=p.querySelector("Value"),la=laEl?parseFloat(laEl.textContent):null,lo=loEl?parseFloat(loEl.textContent):null,hr=hrEl?parseInt(hrEl.textContent):null,t=tEl?new Date(tEl.textContent):null;
+    if(hr&&!isNaN(hr)&&hr>30&&hr<220){hrT+=hr;hrN++;kmHT+=hr;kmHN++;}
+    if(prev&&la&&lo&&prev.la&&prev.lo){const d=hav(prev.la,prev.lo,la,lo);tot+=d;kmD+=d;if(kmD>=1){const el=t&&kmS?(t-kmS)/60000:null;sp.push({km:sp.length+1,time:el?el.toFixed(1):null,hr:kmHN>0?Math.round(kmHT/kmHN):null});kmD=0;kmS=t;kmHT=0;kmHN=0;}if(!kmS&&t)kmS=t;}else kmS=t;prev={la,lo,time:t};});
+  const f=pts[0].querySelector("Time"),l=pts[pts.length-1].querySelector("Time");
+  return{dist:tot.toFixed(2),time:f&&l?((new Date(l.textContent)-new Date(f.textContent))/60000).toFixed(0):null,avgHR:hrN>0?Math.round(hrT/hrN):null,kmSplits:sp,date:f?new Date(f.textContent).toISOString().slice(0,10):new Date().toISOString().slice(0,10),note:"TCX Import"};
+}
+
+// ── Simple SVG Chart ──
+function BarChart(data,color,height=100,refVal=null){
+  if(!data.length)return'';
+  const max=Math.max(...data.map(d=>d.v),1);
+  const w=100/data.length;
+  const bars=data.map((d,i)=>{const h2=Math.max((d.v/max)*80,1);const x=i*w+w*0.1;return`<rect x="${x}%" y="${100-h2}%" width="${w*0.8}%" height="${h2}%" fill="${color}" rx="2"/><text x="${x+w*0.4}%" y="98%" text-anchor="middle" fill="#555" font-size="8">${d.l}</text>`;}).join('');
+  const ref=refVal?`<line x1="0%" y1="${100-(refVal/max)*80}%" x2="100%" y2="${100-(refVal/max)*80}%" stroke="${color}" stroke-dasharray="4,4" opacity="0.5"/>`:''
+  return`<svg viewBox="0 0 100 ${height}" style="width:100%;height:${height}px" preserveAspectRatio="none">${ref}${bars}</svg>`;
+}
+function LineChartSVG(data,color,height=100,refVal=null){
+  if(data.length<2)return'';
+  const vals=data.map(d=>d.v);const min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;
+  const pts=data.map((d,i)=>{const x=(i/(data.length-1))*96+2;const y=90-((d.v-min)/range)*80;return`${x},${y}`;}).join(' ');
+  const area=`${2},90 `+pts+` ${98},90`;
+  const labels=data.filter((_,i)=>i%(Math.ceil(data.length/6))===0).map((d,i,arr)=>{const idx=data.indexOf(d);const x=(idx/(data.length-1))*96+2;return`<text x="${x}%" y="98%" text-anchor="middle" fill="#555" font-size="8">${d.l}</text>`;}).join('');
+  const ref=refVal?`<line x1="0" y1="${90-((refVal-min)/range)*80}" x2="100%" y2="${90-((refVal-min)/range)*80}" stroke="${color}" stroke-dasharray="3,3" opacity="0.5"/>`:''
+  return`<svg viewBox="0 0 100 ${height}" style="width:100%;height:${height}px" preserveAspectRatio="none">
+    <polygon points="${area}" fill="${color}" opacity="0.15"/>
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="0.8"/>
+    ${ref}${labels}
+    ${data.map((d,i)=>{const x=(i/(data.length-1))*96+2,y=90-((d.v-min)/range)*80;return`<circle cx="${x}%" cy="${y}" r="1.5" fill="${color}"/>`;}).join('')}
+  </svg>`;
+}
+
+// ── State ──
+const state={
+  tab:0,subTab:0,
+  workouts:ls.get("ft_workouts")||[],
+  runs:ls.get("ft_runs")||[],
+  meals:ls.get("ft_meals")||[],
+  weights:ls.get("ft_weights")||[],
+  measurements:ls.get("ft_measurements")||[],
+  diary:ls.get("ft_diary")||[],
+  water:ls.get("ft_water")||{},
+  goals:ls.get("ft_goals")||{weeklyKm:20,dailyCal:2000,targetWeight:75,weeklyWorkouts:4},
+  foodDB:ls.get("ft_fooddb")||[],
+  expandedRun:null,editGoals:false,importMsg:null,foodSearch:"",
+  // forms
+  wName:"",wGroup:MG[0],wSets:"",wReps:"",wKg:"",
+  rDist:"",rTime:"",rHR:"",rNote:"",rKmSplits:[],
+  wtVal:"",wtNote:"",measPart:BP[0],measVal:"",
+  mName:"",mCal:"",mProt:"",mCarb:"",mFat:"",mCat:FC[0],
+  dText:"",dMood:1,
+};
+
+function sv(key,val){ls.set(key,val);}
+function re(){render();}
+function set(k,v){state[k]=v;re();}
+
+// ── Computed ──
+function todayISO(){return new Date().toISOString().slice(0,10);}
+function todayStr(){return new Date().toLocaleDateString("de-DE");}
+function todayMeals(){return state.meals.filter(m=>m.date===todayISO());}
+function todayCal(){return todayMeals().reduce((s,m)=>s+Number(m.cal),0);}
+function todayWater(){return state.water[todayISO()]||0;}
+function weekKm(){return state.runs.filter(r=>(new Date()-new Date(r.date))/86400000<=7).reduce((s,r)=>s+Number(r.dist),0);}
+function weekWD(){return new Set(state.workouts.filter(w=>(new Date()-new Date(w.date))/86400000<=7).map(w=>w.date)).size;}
+function streak(){
+  const act=new Set([...state.workouts.map(w=>w.date),...state.runs.map(r=>r.date)]);
+  let s=0,d=new Date();
+  for(let i=0;i<365;i++){if(act.has(d.toISOString().slice(0,10))){s++;d.setDate(d.getDate()-1);}else break;}
+  return s;
+}
+
+// ── HTML helpers ──
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function card(content,extra=""){return`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:18px;${extra}">${content}</div>`;}
+function secTitle(color,text){return`<div style="font-family:'Syne',sans-serif;font-weight:800;font-size:14px;color:${color};margin-bottom:14px;letter-spacing:0.04em">${text}</div>`;}
+function inpEl(id,val,type="text",placeholder="",extra=""){return`<input id="${id}" type="${type}" value="${esc(val)}" placeholder="${esc(placeholder)}" style="${extra}" oninput="state.${id}=this.value;${id.startsWith('r')&&id==='rDist'?'updateKmSplits();':''}"/>`;}
+function selEl(id,val,opts){return`<select id="${id}" onchange="state.${id}=this.value">${opts.map(o=>`<option value="${esc(o)}"${val===o?" selected":""}>${esc(o)}</option>`).join('')}</select>`;}
+function btn(grad,onclick,label,extra=""){return`<button onclick="${onclick}" style="background:${grad};border:none;border-radius:10px;color:#111;font-family:'Syne',sans-serif;font-weight:800;font-size:13px;padding:10px 18px;cursor:pointer;width:100%;${extra}">${label}</button>`;}
+function del(onclick){return`<button onclick="${onclick}" style="background:none;border:none;color:#333;font-size:20px;cursor:pointer;padding:4px 8px;flex-shrink:0">×</button>`;}
+function prog(val,max,color,label,unit){const pct=Math.min((val/max)*100,100);return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="font-size:10px;color:#888">${label}</span><span style="font-size:10px;color:${color}">${val} / ${max} ${unit}</span></div><div style="background:rgba(255,255,255,0.06);border-radius:999px;height:6px;overflow:hidden"><div style="width:${pct}%;background:${color};height:100%;border-radius:999px;transition:width 0.4s"></div></div></div>`;}
+function statCard(icon,label,val,unit,color,sub=""){return`<div style="background:rgba(255,255,255,0.04);border:1px solid ${color}33;border-radius:16px;padding:16px 18px;overflow:hidden;position:relative"><div style="position:absolute;top:-6px;right:-6px;font-size:52px;opacity:0.06">${icon}</div><div style="font-size:9px;color:#777;letter-spacing:0.12em;text-transform:uppercase">${label}</div><div style="font-family:'Syne',sans-serif;font-weight:800;font-size:26px;color:${color};line-height:1;margin-top:6px">${val} <span style="font-size:11px;color:#555">${unit}</span></div>${sub?`<div style="font-size:9px;color:#555;margin-top:4px">${sub}</div>`:''}</div>`;}
+
+// ── Actions ──
+function addWorkout(tmplIdx){
+  if(tmplIdx!==undefined){
+    const t=TMPLS[tmplIdx];
+    const n=[...t.ex.map(e=>({id:Date.now()+Math.random(),date:todayISO(),name:e.name,group:e.g,sets:e.s,reps:e.r,weight:e.w})),...state.workouts];
+    state.workouts=n;sv("ft_workouts",n);re();return;
+  }
+  if(!state.wName||!state.wSets||!state.wReps)return;
+  const n=[{id:Date.now(),date:todayISO(),name:state.wName,group:state.wGroup,sets:state.wSets,reps:state.wReps,weight:state.wKg},...state.workouts];
+  state.workouts=n;sv("ft_workouts",n);state.wName="";state.wSets="";state.wReps="";state.wKg="";re();
+}
+function delWorkout(id){state.workouts=state.workouts.filter(w=>w.id!==id);sv("ft_workouts",state.workouts);re();}
+function addRun(data){
+  const e=data||{id:Date.now(),date:todayISO(),dist:state.rDist,time:state.rTime,avgHR:state.rHR,note:state.rNote,kmSplits:state.rKmSplits.filter(s=>s.time||s.hr)};
+  if(!e.id)e.id=Date.now();
+  state.runs=[e,...state.runs];sv("ft_runs",state.runs);
+  state.rDist="";state.rTime="";state.rHR="";state.rNote="";state.rKmSplits=[];re();
+}
+function delRun(id){state.runs=state.runs.filter(r=>r.id!==id);sv("ft_runs",state.runs);re();}
+function updateKmSplits(){
+  const km=Math.floor(Number(state.rDist));
+  if(km>0&&km<=50)state.rKmSplits=Array.from({length:km},(_,i)=>state.rKmSplits[i]||{km:i+1,time:"",hr:""});
+  else state.rKmSplits=[];
+}
+function setKmSplit(i,field,val){state.rKmSplits[i][field]=val;}
+function addWeight(){if(!state.wtVal)return;state.weights=[...state.weights,{id:Date.now(),date:todayISO(),val:state.wtVal,note:state.wtNote}];sv("ft_weights",state.weights);state.wtVal="";state.wtNote="";re();}
+function delWeight(id){state.weights=state.weights.filter(w=>w.id!==id);sv("ft_weights",state.weights);re();}
+function addMeasurement(){if(!state.measVal)return;state.measurements=[...state.measurements,{id:Date.now(),date:todayISO(),part:state.measPart,val:state.measVal}];sv("ft_measurements",state.measurements);state.measVal="";re();}
+function delMeasurement(id){state.measurements=state.measurements.filter(m=>m.id!==id);sv("ft_measurements",state.measurements);re();}
+function addMeal(pf){
+  const name=pf?.name||state.mName,cal=pf?.cal||state.mCal;if(!name||!cal)return;
+  state.meals=[{id:Date.now(),date:todayISO(),name,cal,prot:pf?.prot||state.mProt,carb:pf?.carb||state.mCarb,fat:pf?.fat||state.mFat,cat:pf?.cat||state.mCat},...state.meals];
+  sv("ft_meals",state.meals);state.mName="";state.mCal="";state.mProt="";state.mCarb="";state.mFat="";re();
+}
+function delMeal(id){state.meals=state.meals.filter(m=>m.id!==id);sv("ft_meals",state.meals);re();}
+function addFoodDB(){if(!state.mName||!state.mCal)return;state.foodDB=[...state.foodDB,{id:Date.now(),name:state.mName,cal:state.mCal,prot:state.mProt,carb:state.mCarb,fat:state.mFat,cat:state.mCat}];sv("ft_fooddb",state.foodDB);re();}
+function addFoodFromDB(id){const f=state.foodDB.find(x=>x.id===id);if(f)addMeal(f);}
+function delFoodDB(id){state.foodDB=state.foodDB.filter(f=>f.id!==id);sv("ft_fooddb",state.foodDB);re();}
+function setWater(n){state.water={...state.water,[todayISO()]:n};sv("ft_water",state.water);re();}
+function addDiary(){if(!state.dText.trim())return;state.diary=[{id:Date.now(),date:todayISO(),text:state.dText,mood:state.dMood},...state.diary];sv("ft_diary",state.diary);state.dText="";re();}
+function delDiary(id){state.diary=state.diary.filter(d=>d.id!==id);sv("ft_diary",state.diary);re();}
+function saveGoalKey(k,v){state.goals={...state.goals,[k]:Number(v)};sv("ft_goals",state.goals);re();}
+function exportData(){const b=new Blob([JSON.stringify({workouts:state.workouts,runs:state.runs,meals:state.meals,weights:state.weights,measurements:state.measurements,diary:state.diary,water:state.water,goals:state.goals,foodDB:state.foodDB},null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`fittrack_${todayISO()}.json`;a.click();}
+function exportCSV(type){let hd,rows;if(type==="runs"){hd=["Datum","km","min","HF","Notiz"];rows=state.runs.map(r=>[r.date,r.dist,r.time,r.avgHR||"",r.note||""]);}else if(type==="workouts"){hd=["Datum","Übung","Gruppe","Sätze","Wdh","kg"];rows=state.workouts.map(w=>[w.date,w.name,w.group,w.sets,w.reps,w.weight||""]);}else{hd=["Datum","kg","Notiz"];rows=state.weights.map(w=>[w.date,w.val,w.note||""]);}const b=new Blob([[hd,...rows].map(r=>r.join(";")).join("\n")],{type:"text/csv"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`fittrack_${type}_${todayISO()}.csv`;a.click();}
+
+async function handleImport(){
+  const inp=document.getElementById("fileInput");inp.click();
+}
+document.addEventListener("DOMContentLoaded",()=>{
+  const fi=document.getElementById("fileInput");
+  if(fi)fi.addEventListener("change",async e=>{
+    const file=e.target.files?.[0];if(!file)return;
+    state.importMsg="Analysiere…";re();
+    try{const text=await file.text();let p=file.name.toLowerCase().endsWith(".gpx")?parseGPX(text):parseTCX(text);
+      if(!p){state.importMsg="❌ Fehler beim Lesen";re();return;}
+      p.id=Date.now();addRun(p);state.importMsg=`✓ ${p.dist} km · ${p.time} min${p.avgHR?` · ⌀${p.avgHR} bpm`:""}`;re();
+    }catch(err){state.importMsg="❌ "+err.message;re();}
+    e.target.value="";setTimeout(()=>{state.importMsg=null;re();},5000);
+  });
+});
+
+// ── Render tabs ──
+function renderDashboard(){
+  const wkc=weekKm(),wwd=weekWD(),tc=todayCal(),tw=todayWater(),lat=state.weights.length?Number(state.weights[state.weights.length-1].val):null;
+  const calData=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));const iso=d.toISOString().slice(0,10);return{l:d.toLocaleDateString("de-DE",{weekday:"short"}),v:state.meals.filter(m=>m.date===iso).reduce((s,m)=>s+Number(m.cal),0)};});
+  const wtData=state.weights.slice(-15).map(w=>({l:new Date(w.date).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"}),v:Number(w.val)}));
+  const runData=state.runs.slice(-8).map(r=>({l:new Date(r.date).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"}),v:Number(r.dist)}));
+
+  const maxEx={};state.workouts.forEach(w=>{if(w.weight&&Number(w.weight)>0)if(!maxEx[w.name]||Number(w.weight)>Number(maxEx[w.name].weight))maxEx[w.name]=w;});
+  const lr=state.runs.reduce((b,r)=>!b||Number(r.dist)>Number(b.dist)?r:b,null);
+  const fr=state.runs.reduce((b,r)=>r.dist>=5&&r.time&&(!b||r.time/r.dist<b.time/b.dist)?r:b,null);
+  const wkAvgCal=Math.round(calData.reduce((s,d)=>s+d.v,0)/7);
+
+  return`
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div style="background:linear-gradient(135deg,rgba(232,255,107,0.12),rgba(168,224,99,0.06));border:1px solid rgba(232,255,107,0.2);border-radius:16px;padding:16px;text-align:center">
+        <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:32px;color:#e8ff6b;line-height:1">${streak()}</div>
+        <div style="font-size:9px;color:#555;letter-spacing:0.1em;margin-top:4px">TAGE STREAK 🔥</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:16px;text-align:center">
+        <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:32px;color:#5ce8ff;line-height:1">${wkc.toFixed(1)}</div>
+        <div style="font-size:9px;color:#555;letter-spacing:0.1em;margin-top:4px">KM DIESE WOCHE</div>
+      </div>
+    </div>
+    ${card(
+      `<div style="font-size:9px;color:#555;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:12px">Ziele dieser Woche</div>`+
+      prog(wkc.toFixed(1),state.goals.weeklyKm,"#5ce8ff","Lauf-Ziel","km")+
+      prog(wwd,state.goals.weeklyWorkouts,"#e8ff6b","Trainingstage","Tage")+
+      prog(tc,state.goals.dailyCal,"#ff7c5c","Kalorien heute","kcal")+
+      prog(tw,8,"#5ce8ff","Wasser heute","Gläser")
+    )}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      ${statCard("💪","Workout heute",state.workouts.filter(w=>w.date===todayISO()).length,"Übgn","#e8ff6b")}
+      ${statCard("🔥","Kalorien heute",tc,"kcal","#ff7c5c",`Ziel: ${state.goals.dailyCal}`)}
+      ${statCard("⚖️","Gewicht",lat||"–","kg","#c084fc",state.goals.targetWeight?`Ziel: ${state.goals.targetWeight} kg`:"")}
+      ${statCard("💧","Wasser",tw,"/ 8","#5ce8ff")}
+    </div>
+    ${(lr||Object.keys(maxEx).length>0)?card(
+      `<div style="font-size:9px;color:#555;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:12px">🏆 Persönliche Bestleistungen</div>`+
+      (lr?`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)"><span style="font-size:11px;color:#555">Längster Lauf</span><span style="font-size:11px;color:#5ce8ff;font-weight:700">${lr.dist} km</span></div>`:"")+
+      (fr?`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)"><span style="font-size:11px;color:#555">Schnellstes Pace</span><span style="font-size:11px;color:#5ce8ff;font-weight:700">${(fr.time/fr.dist).toFixed(1)} min/km</span></div>`:"")+
+      Object.entries(maxEx).slice(0,4).map(([n,w])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)"><span style="font-size:11px;color:#555">${esc(n)}</span><span style="font-size:11px;color:#e8ff6b;font-weight:700">${w.weight} kg</span></div>`).join('')
+    ):""}
+    ${card(
+      `<div style="font-size:9px;color:#555;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:12px">📊 Wochenrückblick</div>`+
+      `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">`+
+      [{l:"Trainingstage",v:wwd,u:"Tage",c:"#e8ff6b"},{l:"Gelaufene km",v:wkc.toFixed(1),u:"km",c:"#5ce8ff"},{l:"Ø Kalorien",v:wkAvgCal,u:"kcal",c:"#ff7c5c"},{l:"Aktive Tage",v:new Set([...state.workouts.filter(w=>(new Date()-new Date(w.date))/86400000<=7).map(w=>w.date),...state.runs.filter(r=>(new Date()-new Date(r.date))/86400000<=7).map(r=>r.date)]).size,u:"Tage",c:"#a8e063"}]
+      .map(({l,v,u,c})=>`<div style="background:rgba(255,255,255,0.03);border-radius:10px;padding:10px 12px"><div style="font-size:8px;color:#555;margin-bottom:4px">${l}</div><div style="font-family:'Syne',sans-serif;font-weight:800;font-size:20px;color:${c}">${v} <span style="font-size:11px;color:#555">${u}</span></div></div>`).join('')+
+      `</div>`
+    )}
+    ${calData.some(d=>d.v>0)?card(`<div style="font-size:9px;color:#555;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:10px">Kalorien – 7 Tage</div>`+BarChart(calData,"#ff7c5c",110,state.goals.dailyCal)):""}
+    ${wtData.length>1?card(`<div style="font-size:9px;color:#555;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:10px">Gewichtsverlauf</div>`+LineChartSVG(wtData,"#c084fc",110,state.goals.targetWeight)):""}
+    ${runData.length>0?card(`<div style="font-size:9px;color:#555;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:10px">Läufe (km)</div>`+BarChart(runData,"#5ce8ff",110)):""}
+  </div>`;
+}
+
+function renderWorkout(){
+  return`<div style="display:flex;flex-direction:column;gap:14px">
+    ${card(secTitle("#e8ff6b","📋 Vorlagen")+TMPLS.map((t,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:rgba(232,255,107,0.06);border-radius:10px;border:1px solid rgba(232,255,107,0.15);margin-bottom:8px"><div><div style="font-family:'Syne',sans-serif;font-weight:700;font-size:12px;color:#e8ff6b">${t.name}</div><div style="font-size:10px;color:#555;margin-top:2px">${t.ex.map(e=>e.name).join(" · ")}</div></div><button onclick="addWorkout(${i})" style="background:#e8ff6b;border:none;border-radius:8px;color:#111;font-family:'Syne',sans-serif;font-weight:800;font-size:11px;padding:6px 12px;cursor:pointer">Laden</button></div>`).join(''))}
+    ${card(secTitle("#e8ff6b","+ Übung eintragen")+`
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div><label style="font-size:9px;color:#666;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:4px;display:block">Übungsname</label>${inpEl("wName",state.wName,"text","z.B. Bankdrücken")}</div>
+        <div><label style="font-size:9px;color:#666;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:4px;display:block">Muskelgruppe</label>${selEl("wGroup",state.wGroup,MG)}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Sätze</label>${inpEl("wSets",state.wSets,"number","4")}</div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Wdh.</label>${inpEl("wReps",state.wReps,"number","10")}</div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">KG</label>${inpEl("wKg",state.wKg,"number","80")}</div>
+        </div>
+        ${btn("linear-gradient(135deg,#e8ff6b,#a8e063)","addWorkout()","Speichern")}
+      </div>`)}
+    <div style="font-size:9px;color:#555;letter-spacing:0.12em;text-transform:uppercase;padding-left:4px">Verlauf</div>
+    ${state.workouts.length===0?'<div style="text-align:center;padding:36px;color:#3a3a3a">💪<br><br>Noch keine Einträge</div>':
+    state.workouts.map(w=>`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center">
+      <div><div style="font-family:'Syne',sans-serif;font-weight:700;font-size:13px;color:#e8ff6b">${esc(w.name)}</div><div style="font-size:10px;color:#555;margin-top:2px">${esc(w.group)} · ${w.sets}×${w.reps}${w.weight?" · "+w.weight+" kg":""}</div><div style="font-size:9px;color:#333;margin-top:2px">${new Date(w.date).toLocaleDateString("de-DE")}</div></div>
+      ${del(`delWorkout(${w.id})`)}
+    </div>`).join('')}
+  </div>`;
+}
+
+function renderLauf(){
+  return`<div style="display:flex;flex-direction:column;gap:14px">
+    <input type="file" id="fileInput" accept=".gpx,.tcx" style="display:none"/>
+    <div style="background:rgba(92,232,255,0.06);border:1px solid rgba(92,232,255,0.2);border-radius:16px;padding:18px">
+      <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:12px;color:#5ce8ff;margin-bottom:8px">📥 Huawei Import (GPX / TCX)</div>
+      <div style="font-size:9px;color:#555;margin-bottom:10px;line-height:1.7">Huawei Health: Aktivität → Routen-Icon → GPX/TCX exportieren → hier hochladen.</div>
+      <button onclick="handleImport()" style="background:linear-gradient(135deg,#5ce8ff,#0aa0c4);border:none;border-radius:10px;color:#111;font-family:'Syne',sans-serif;font-weight:800;font-size:11px;padding:8px 14px;cursor:pointer">Datei wählen</button>
+      ${state.importMsg?`<div style="font-size:10px;color:${state.importMsg.startsWith("✓")?"#a8e063":"#ff7c5c"};margin-top:8px">${esc(state.importMsg)}</div>`:""}
+    </div>
+    ${card(secTitle("#5ce8ff","+ Lauf eintragen")+`
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">km</label><input id="rDist" type="number" step="0.1" value="${esc(state.rDist)}" placeholder="5.2" oninput="state.rDist=this.value;updateKmSplits();render()"/></div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Zeit (min)</label>${inpEl("rTime",state.rTime,"number","28")}</div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">⌀ HF</label>${inpEl("rHR",state.rHR,"number","152")}</div>
+        </div>
+        ${state.rKmSplits.length>0?`<div>
+          <label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:8px;display:block">Kilometer-Splits</label>
+          ${state.rKmSplits.map((s,i)=>`<div style="display:grid;grid-template-columns:36px 1fr 1fr;gap:6px;align-items:center;margin-bottom:5px">
+            <div style="font-size:9px;color:#5ce8ff;font-family:'Syne',sans-serif;font-weight:700">KM${s.km}</div>
+            <input type="number" step="0.1" placeholder="Zeit (min)" value="${esc(s.time)}" style="padding:7px 10px;font-size:11px" oninput="setKmSplit(${i},'time',this.value)"/>
+            <input type="number" placeholder="HF" value="${esc(s.hr)}" style="padding:7px 10px;font-size:11px" oninput="setKmSplit(${i},'hr',this.value)"/>
+          </div>`).join('')}
+        </div>`:""}
+        <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Notiz</label>${inpEl("rNote",state.rNote,"text","Morgenrunde…")}</div>
+        ${btn("linear-gradient(135deg,#5ce8ff,#0aa0c4)","addRun()","Speichern")}
+      </div>`)}
+    <div style="font-size:9px;color:#555;letter-spacing:0.12em;text-transform:uppercase;padding-left:4px">Verlauf</div>
+    ${state.runs.length===0?'<div style="text-align:center;padding:36px;color:#3a3a3a">👟<br><br>Noch keine Läufe</div>':
+    state.runs.map(r=>{
+      const pace=r.dist>0&&r.time>0?(r.time/r.dist).toFixed(1):"–";const exp=state.expandedRun===r.id;
+      return`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden">
+        <div style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="state.expandedRun=${exp?null:r.id};re()">
+          <div>
+            <div style="display:flex;align-items:baseline;gap:8px"><span style="font-family:'Syne',sans-serif;font-weight:700;font-size:20px;color:#5ce8ff">${r.dist}</span><span style="font-size:11px;color:#555">km</span>${r.avgHR?`<span style="font-size:10px;color:#ff7c5c">❤ ${r.avgHR}</span>`:""}</div>
+            <div style="font-size:10px;color:#555;margin-top:2px">${r.time} min · ${pace} min/km</div>
+            ${r.note?`<div style="font-size:10px;color:#444;margin-top:2px">${esc(r.note)}</div>`:""}
+            <div style="font-size:9px;color:#333;margin-top:2px">${new Date(r.date).toLocaleDateString("de-DE")}</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${r.kmSplits?.length>0?`<span style="font-size:8px;color:#5ce8ff;background:rgba(92,232,255,0.1);padding:2px 6px;border-radius:4px">${r.kmSplits.length} splits</span>`:""}
+            ${del(`delRun(${r.id})`)}
+          </div>
+        </div>
+        ${exp&&r.kmSplits?.length>0?`<div style="border-top:1px solid rgba(255,255,255,0.06);padding:12px 16px">
+          <div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px">Splits</div>
+          ${r.kmSplits.map(s=>`<div style="display:flex;justify-content:space-between;padding:5px 10px;background:rgba(92,232,255,0.04);border-radius:7px;margin-bottom:4px"><span style="font-size:10px;color:#5ce8ff;font-family:'Syne',sans-serif;font-weight:700">KM ${s.km}</span><div style="display:flex;gap:14px">${s.time?`<span style="font-size:10px;color:#eee">${s.time} min`:""}${s.hr?`<span style="font-size:10px;color:#ff7c5c">❤ ${s.hr}</span>`:""}</div></div>`).join('')}
+        </div>`:""}
+      </div>`;}).join('')}
+  </div>`;
+}
+
+function renderKoerper(){
+  const wtData=state.weights.slice(-20).map(w=>({l:new Date(w.date).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"}),v:Number(w.val)}));
+  return`<div style="display:flex;flex-direction:column;gap:14px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${["Gewicht","Maße"].map((t,i)=>`<button onclick="state.subTab=${i};re()" style="background:${state.subTab===i?"rgba(192,132,252,0.15)":"transparent"};border:1px solid ${state.subTab===i?"rgba(192,132,252,0.4)":"rgba(255,255,255,0.08)"};border-radius:10px;color:${state.subTab===i?"#c084fc":"#555"};font-family:'Syne',sans-serif;font-weight:700;font-size:12px;padding:9px;cursor:pointer">${t}</button>`).join('')}
+    </div>
+    ${state.subTab===0?`
+      ${card(secTitle("#c084fc","+ Gewicht eintragen")+`<div style="display:flex;flex-direction:column;gap:10px"><div style="display:grid;grid-template-columns:1fr 2fr;gap:8px"><div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">kg</label>${inpEl("wtVal",state.wtVal,"number","75.4","step='0.1'")}</div><div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Notiz</label>${inpEl("wtNote",state.wtNote,"text","Morgens nüchtern…")}</div></div>${btn("linear-gradient(135deg,#c084fc,#7c3aed)","addWeight()","Speichern")}</div>`)}
+      ${wtData.length>1?card(`<div style="font-size:9px;color:#555;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:10px">Verlauf</div>`+LineChartSVG(wtData,"#c084fc",130,state.goals.targetWeight)):""}
+      ${state.weights.length>0?`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        ${[{l:"Aktuell",v:state.weights[state.weights.length-1].val+" kg",c:"#c084fc"},{l:"Tiefst",v:Math.min(...state.weights.map(w=>Number(w.val))).toFixed(1)+" kg",c:"#a8e063"},{l:"Höchst",v:Math.max(...state.weights.map(w=>Number(w.val))).toFixed(1)+" kg",c:"#ff7c5c"}]
+        .map(({l,v,c})=>`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;text-align:center;padding:10px 12px"><div style="font-size:8px;color:#555;margin-bottom:5px">${l}</div><div style="font-family:'Syne',sans-serif;font-weight:800;font-size:15px;color:${c}">${v}</div></div>`).join('')}
+      </div>`:""}
+      <div style="font-size:9px;color:#555;text-transform:uppercase;padding-left:4px">Einträge</div>
+      ${state.weights.length===0?'<div style="text-align:center;padding:36px;color:#3a3a3a">⚖️<br><br>Noch keine Einträge</div>':
+      [...state.weights].reverse().map(w=>`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center"><div><div style="font-family:'Syne',sans-serif;font-weight:700;font-size:18px;color:#c084fc">${w.val} <span style="font-size:11px;color:#555">kg</span></div>${w.note?`<div style="font-size:10px;color:#555;margin-top:2px">${esc(w.note)}</div>`:""}<div style="font-size:9px;color:#333;margin-top:2px">${new Date(w.date).toLocaleDateString("de-DE")}</div></div>${del(`delWeight(${w.id})`)}</div>`).join('')}
+    `:`
+      ${card(secTitle("#c084fc","+ Körpermaße eintragen")+`<div style="display:flex;flex-direction:column;gap:10px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Körperstelle</label>${selEl("measPart",state.measPart,BP)}</div><div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">cm</label>${inpEl("measVal",state.measVal,"number","82.5")}</div></div>${btn("linear-gradient(135deg,#c084fc,#7c3aed)","addMeasurement()","Speichern")}</div>`)}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        ${BP.map(p=>{const ents=state.measurements.filter(m=>m.part===p).sort((a,b)=>a.date.localeCompare(b.date));const last=ents[ents.length-1],prev2=ents[ents.length-2];const diff=last&&prev2?(Number(last.val)-Number(prev2.val)).toFixed(1):null;return`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:10px 14px"><div style="font-size:8px;color:#555;margin-bottom:4px">${p}</div><div style="font-family:'Syne',sans-serif;font-weight:800;font-size:18px;color:#c084fc">${last?last.val+" cm":"–"}</div>${diff?`<div style="font-size:9px;color:${Number(diff)<0?"#a8e063":"#ff7c5c"};margin-top:2px">${Number(diff)>0?"+":""}${diff} cm</div>`:""}</div>`;}).join('')}
+      </div>
+      ${state.measurements.length===0?'<div style="text-align:center;padding:36px;color:#3a3a3a">📏<br><br>Noch keine Einträge</div>':
+      [...state.measurements].reverse().map(m=>`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:11px 14px;display:flex;justify-content:space-between;align-items:center"><div><span style="font-size:12px;color:#c084fc;font-family:'Syne',sans-serif;font-weight:700">${esc(m.part)}</span><span style="font-size:12px;color:#eee;margin-left:10px">${m.val} cm</span><div style="font-size:9px;color:#333;margin-top:2px">${new Date(m.date).toLocaleDateString("de-DE")}</div></div>${del(`delMeasurement(${m.id})`)}</div>`).join('')}
+    `}
+  </div>`;
+}
+
+function renderEssen(){
+  const tm=todayMeals(),tc2=todayCal(),tw2=todayWater();
+  return`<div style="display:flex;flex-direction:column;gap:14px">
+    <div style="background:rgba(255,100,60,0.08);border:1px solid rgba(255,100,60,0.2);border-radius:16px;padding:16px">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center;margin-bottom:12px">
+        ${[{l:"kcal",v:tc2,c:"#ff7c5c"},{l:"Prot",v:tm.reduce((s,m)=>s+Number(m.prot||0),0)+"g",c:"#e8ff6b"},{l:"KH",v:tm.reduce((s,m)=>s+Number(m.carb||0),0)+"g",c:"#a8e063"},{l:"Fett",v:tm.reduce((s,m)=>s+Number(m.fat||0),0)+"g",c:"#5ce8ff"}]
+        .map(({l,v,c})=>`<div><div style="font-family:'Syne',sans-serif;font-weight:800;font-size:18px;color:${c}">${v}</div><div style="font-size:8px;color:#555;margin-top:2px">${l}</div></div>`).join('')}
+      </div>
+      ${prog(tc2,state.goals.dailyCal,"#ff7c5c","Kalorien-Ziel","kcal")}
+      <div style="margin-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:9px;color:#555;letter-spacing:0.1em">💧 WASSER HEUTE</span>
+          <span style="font-size:10px;color:#5ce8ff">${tw2} / 8 Gläser</span>
+        </div>
+        <div style="display:flex;gap:6px">
+          ${Array.from({length:8},(_,i)=>`<div onclick="setWater(${i<tw2?i:i+1})" style="flex:1;height:20px;border-radius:4px;background:${i<tw2?"#5ce8ff":"rgba(255,255,255,0.08)"};cursor:pointer;transition:background 0.2s"></div>`).join('')}
+        </div>
+      </div>
+    </div>
+    ${state.foodDB.length>0?card(secTitle("#ff7c5c","🗃 Gespeicherte Lebensmittel")+`
+      <input type="text" placeholder="Suchen…" value="${esc(state.foodSearch)}" oninput="state.foodSearch=this.value;re()" style="margin-bottom:10px"/>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${state.foodDB.filter(f=>f.name.toLowerCase().includes(state.foodSearch.toLowerCase())).map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:8px"><div><span style="font-size:12px;color:#eee;font-family:'Syne',sans-serif;font-weight:700">${esc(f.name)}</span><span style="font-size:10px;color:#555;margin-left:8px">${f.cal} kcal</span></div><div style="display:flex;gap:6px"><button onclick="addFoodFromDB(${f.id})" style="background:#ff7c5c;border:none;border-radius:6px;color:#111;font-family:'Syne',sans-serif;font-weight:800;font-size:10px;padding:4px 8px;cursor:pointer">+ Hinzufügen</button><button onclick="delFoodDB(${f.id})" style="background:none;border:none;color:#333;font-size:16px;cursor:pointer">×</button></div></div>`).join('')}
+      </div>`):""}
+    ${card(secTitle("#ff7c5c","+ Mahlzeit eintragen")+`
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px">
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Lebensmittel</label>${inpEl("mName",state.mName,"text","z.B. Haferflocken")}</div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Kategorie</label>${selEl("mCat",state.mCat,FC)}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">kcal</label>${inpEl("mCal",state.mCal,"number","350")}</div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Prot</label>${inpEl("mProt",state.mProt,"number","12")}</div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">KH</label>${inpEl("mCarb",state.mCarb,"number","55")}</div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Fett</label>${inpEl("mFat",state.mFat,"number","8")}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          ${btn("linear-gradient(135deg,#ff7c5c,#ff4d2e)","addMeal()","Hinzufügen")}
+          <button onclick="addFoodDB()" style="background:transparent;border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#eee;font-family:'Syne',sans-serif;font-weight:800;font-size:11px;padding:10px;cursor:pointer;width:100%">💾 In DB</button>
+        </div>
+      </div>`)}
+    <div style="font-size:9px;color:#555;text-transform:uppercase;padding-left:4px">Verlauf</div>
+    ${state.meals.length===0?'<div style="text-align:center;padding:36px;color:#3a3a3a">🥗<br><br>Noch keine Mahlzeiten</div>':
+    state.meals.map(m=>`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center"><div><div style="display:flex;gap:7px;align-items:center"><span style="font-family:'Syne',sans-serif;font-weight:700;font-size:13px;color:#ff7c5c">${esc(m.name)}</span><span style="font-size:8px;color:#555;background:rgba(255,255,255,0.06);padding:2px 5px;border-radius:4px">${m.cat}</span></div><div style="font-size:10px;color:#555;margin-top:2px">${m.cal} kcal${m.prot?" · P:"+m.prot+"g":""}${m.carb?" · KH:"+m.carb+"g":""}${m.fat?" · F:"+m.fat+"g":""}</div><div style="font-size:9px;color:#333;margin-top:2px">${new Date(m.date).toLocaleDateString("de-DE")}</div></div>${del(`delMeal(${m.id})`)}</div>`).join('')}
+  </div>`;
+}
+
+function renderMehr(){
+  return`<div style="display:flex;flex-direction:column;gap:14px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+      ${["Tagebuch","Ziele","Export"].map((t,i)=>`<button onclick="state.subTab=${i};re()" style="background:${state.subTab===i?"rgba(168,224,99,0.15)":"transparent"};border:1px solid ${state.subTab===i?"rgba(168,224,99,0.4)":"rgba(255,255,255,0.08)"};border-radius:10px;color:${state.subTab===i?"#a8e063":"#555"};font-family:'Syne',sans-serif;font-weight:700;font-size:11px;padding:8px;cursor:pointer">${t}</button>`).join('')}
+    </div>
+    ${state.subTab===0?`
+      ${card(secTitle("#a8e063","✎ Tageseintrag")+`
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:8px;display:block">Stimmung</label>
+            <div style="display:flex;gap:10px">
+              ${MOODS.map((m,i)=>`<button onclick="state.dMood=${i};re()" style="background:${state.dMood===i?"rgba(168,224,99,0.2)":"transparent"};border:1px solid ${state.dMood===i?"rgba(168,224,99,0.4)":"rgba(255,255,255,0.08)"};border-radius:8px;padding:6px 10px;cursor:pointer;font-size:18px">${m}</button>`).join('')}
+            </div>
+          </div>
+          <div><label style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;display:block">Notiz</label>
+            <textarea id="dText" style="min-height:80px" placeholder="Wie war dein Tag?" oninput="state.dText=this.value">${esc(state.dText)}</textarea>
+          </div>
+          ${btn("linear-gradient(135deg,#a8e063,#5a9e2a)","addDiary()","Speichern")}
+        </div>`)}
+      ${state.diary.length===0?'<div style="text-align:center;padding:36px;color:#3a3a3a">📖<br><br>Noch keine Einträge</div>':
+      state.diary.map(d=>`<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 16px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><span style="font-size:20px">${MOODS[d.mood]}</span><span style="font-size:9px;color:#555">${ML[d.mood]} · ${new Date(d.date).toLocaleDateString("de-DE")}</span></div>${del(`delDiary(${d.id})`)}</div><div style="font-size:12px;color:#eee;line-height:1.6;white-space:pre-wrap">${esc(d.text)}</div></div>`).join('')}
+    `:""}
+    ${state.subTab===1?card(
+      `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><div style="font-family:'Syne',sans-serif;font-weight:800;font-size:14px;color:#a8e063">🎯 Ziele setzen</div><button onclick="state.editGoals=!state.editGoals;re()" style="background:${state.editGoals?"rgba(168,224,99,0.2)":"transparent"};border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#a8e063;font-family:'Syne',sans-serif;font-weight:700;font-size:10px;padding:5px 10px;cursor:pointer">${state.editGoals?"Fertig":"Bearbeiten"}</button></div>`+
+      [{key:"weeklyKm",label:"Wöchentliche km",unit:"km",color:"#5ce8ff",min:1,max:200},{key:"dailyCal",label:"Tägliche Kalorien",unit:"kcal",color:"#ff7c5c",min:500,max:5000},{key:"targetWeight",label:"Zielgewicht",unit:"kg",color:"#c084fc",min:30,max:200},{key:"weeklyWorkouts",label:"Trainingstage/Woche",unit:"Tage",color:"#e8ff6b",min:1,max:7}]
+      .map(({key,label,unit,color,min,max})=>`<div style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="font-size:10px;color:#555">${label}</span><span style="font-size:12px;color:${color};font-weight:700">${state.goals[key]} ${unit}</span></div>${state.editGoals?`<input type="range" min="${min}" max="${max}" value="${state.goals[key]}" oninput="saveGoalKey('${key}',this.value)" style="width:100%;accent-color:${color}"/>`:`<div style="background:rgba(255,255,255,0.06);border-radius:999px;height:6px"><div style="width:${Math.min(((state.goals[key]-min)/(max-min))*100,100)}%;background:${color};height:100%;border-radius:999px"></div></div>`}</div>`).join('')
+    ):""}
+    ${state.subTab===2?`<div style="display:flex;flex-direction:column;gap:10px">
+      ${card(secTitle("#a8e063","📤 Export")+`<div style="display:flex;flex-direction:column;gap:8px">
+        ${btn("linear-gradient(135deg,#a8e063,#5a9e2a)","exportData()","📦 Alle Daten (JSON)")}
+        ${btn("linear-gradient(135deg,#5ce8ff,#0aa0c4)","exportCSV('runs')","🏃 Läufe als CSV")}
+        ${btn("linear-gradient(135deg,#e8ff6b,#a8e063)","exportCSV('workouts')","💪 Workouts als CSV")}
+        ${btn("linear-gradient(135deg,#c084fc,#7c3aed)","exportCSV('weights')","⚖ Gewicht als CSV")}
+      </div>`)}
+      ${card(`<div style="font-size:9px;color:#555;text-transform:uppercase;margin-bottom:12px">Statistik</div>`+
+        [{l:"Workouts gesamt",v:state.workouts.length},{l:"Läufe gesamt",v:state.runs.length},{l:"Gesamt km",v:state.runs.reduce((s,r)=>s+Number(r.dist),0).toFixed(1)+" km"},{l:"Mahlzeiten",v:state.meals.length},{l:"Gewicht-Einträge",v:state.weights.length},{l:"Tagebuch",v:state.diary.length}]
+        .map(({l,v})=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06)"><span style="font-size:11px;color:#555">${l}</span><span style="font-size:11px;color:#eee;font-family:'Syne',sans-serif;font-weight:700">${v}</span></div>`).join('')
+      )}
+    </div>`:""}
+  </div>`;
+}
+
+// ── Main render ──
+function render(){
+  const tabs=[{icon:"▦",l:"Board",c:"#e8ff6b"},{icon:"◈",l:"Workout",c:"#e8ff6b"},{icon:"⟳",l:"Lauf",c:"#5ce8ff"},{icon:"⚖",l:"Körper",c:"#c084fc"},{icon:"◉",l:"Essen",c:"#ff7c5c"},{icon:"✎",l:"Mehr",c:"#a8e063"}];
+  const content=[renderDashboard,renderWorkout,renderLauf,renderKoerper,renderEssen,renderMehr][state.tab]();
+  document.getElementById("app").innerHTML=`
+    <div style="min-height:100vh;max-width:480px;margin:0 auto;padding-bottom:92px">
+      <div style="padding:24px 20px 0;display:flex;justify-content:space-between;align-items:flex-end">
+        <div>
+          <div style="font-size:9px;color:#555;letter-spacing:0.16em;text-transform:uppercase;margin-bottom:2px">${todayStr()}</div>
+          <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:24px;letter-spacing:-0.02em;line-height:1">FIT<span style="color:#e8ff6b">TRACK</span></div>
+        </div>
+      </div>
+      <div style="padding:16px 16px 0">${content}</div>
+      <div style="position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:rgba(13,13,13,0.97);backdrop-filter:blur(20px);border-top:1px solid rgba(255,255,255,0.06);display:grid;grid-template-columns:repeat(6,1fr);padding:10px 0 14px">
+        ${tabs.map((t,i)=>`<button onclick="state.tab=${i};state.subTab=0;re()" style="background:none;border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;color:${state.tab===i?t.c:"#333"}">
+          <span style="font-size:16px;line-height:1">${t.icon}</span>
+          <span style="font-size:8px;letter-spacing:0.05em">${t.l}</span>
+        </button>`).join('')}
+      </div>
+    </div>`;
+  // re-attach file input listener
+  const fi=document.getElementById("fileInput");
+  if(fi)fi.addEventListener("change",async e=>{
+    const file=e.target.files?.[0];if(!file)return;
+    state.importMsg="Analysiere…";re();
+    try{const text=await file.text();let p=file.name.toLowerCase().endsWith(".gpx")?parseGPX(text):parseTCX(text);
+      if(!p){state.importMsg="❌ Fehler";re();return;}
+      p.id=Date.now();addRun(p);state.importMsg=`✓ ${p.dist} km · ${p.time} min${p.avgHR?` · ⌀${p.avgHR} bpm`:""}`;re();
+    }catch(err){state.importMsg="❌ "+err.message;re();}
+    e.target.value="";setTimeout(()=>{state.importMsg=null;re();},5000);
+  });
+}
+render();
+</script>
+</body>
+</html>
